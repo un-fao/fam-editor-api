@@ -1,0 +1,37 @@
+# Paths excluded from fastapi.zip (rsync --exclude-from, see .github/workflows/deploy.yaml)
+
+# Repository plumbing — not part of the deployed application
+/.git/
+/.github/
+/.gitignore
+/.deployignore
+/deploy/
+/tests/
+
+# Local runtime state. conf/user-data-fastapi.sh mounts the shared datafiles
+# from EFS at /var/metadata/datafiles (outside /app), so none of these are
+# mount points — but they hold per-instance state that a redeploy must not
+# overwrite. The tracked placeholders (jobs/index.html, logs/index.html,
+# db/.gitkeep) are kept on purpose: the code creates these directories lazily,
+# and a couple of read paths only tolerate a missing one by returning early.
+/db/*.sqlite
+/db/*.duckdb
+/logs/*.log
+/jobs/*.json
+/data/
+
+# Secrets and local environment. Values reach the service through the systemd
+# unit written by the user-data, never through a file in the archive.
+.env
+reviewer.env
+
+# Build and editor noise
+__pycache__/
+*.pyc
+venv/
+venv313/
+.DS_Store
+*.bak
+/.idea/
+/trash/
+*.ipynb

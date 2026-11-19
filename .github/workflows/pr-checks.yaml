@@ -1,0 +1,91 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches:
+      - fao-master-dev
+      - fao-master-qa
+      - fao-master-prod
+
+concurrency:
+  group: pr-checks-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the runtime installed by conf/user-data-fastapi.sh
+          python-version: '3.11'
+
+      - name: Guard against environment-specific config
+        run: |
+          # These live in .gitignore and are delivered per environment by
+          # fam-editor-iac (SSM parameters injected into the systemd unit);
+          # committing them would ship one environment's credentials to all three.
+          BLOCKED='.env reviewer.env'
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          rc=0
+          for f in $BLOCKED; do
+            if echo "$CHANGED" | grep -qx "$f"; then
+              echo "::error file=$f::$f is environment-specific and must not be committed"
+              rc=1
+            fi
+          done
+          exit $rc
+
+      - name: Compile changed Python files
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=d "origin/${{ github.base_ref }}...HEAD" -- '*.py' \
+            | grep -Ev '^(external|venv[0-9]*)/' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No application Python files changed"
+            exit 0
+          fi
+          echo "$CHANGED"
+          echo "$CHANGED" | xargs -r -n1 python -m py_compile
+
+      - name: Validate requirements manifests
+        run: |
+          python -m pip install --quiet --upgrade packaging
+          # Catches malformed or unparseable pins before an instance tries to
+          # pip-install them at boot, where the failure is invisible until the
+          # health check starts flapping.
+          python - <<'PY'
+          import glob, sys
+          from packaging.requirements import Requirement, InvalidRequirement
+
+          rc = 0
+          for path in sorted(glob.glob("requirements*.txt")):
+              for lineno, raw in enumerate(open(path), 1):
+                  line = raw.split("#", 1)[0].strip()
+                  if not line or line.startswith("-"):
+                      continue
+                  try:
+                      Requirement(line)
+                  except InvalidRequirement as exc:
+                      print(f"::error file={path},line={lineno}::{exc}")
+                      rc = 1
+              print(f"ok {path}")
+          sys.exit(rc)
+          PY
+
+      - name: Run tests
+        run: |
+          # tests/ is gitignored upstream, so this is a no-op until FAO adds one.
+          if [ ! -d tests ]; then
+            echo "No tests/ directory"
+            exit 0
+          fi
+          python -m pip install --quiet pytest
+          python -m pytest tests
